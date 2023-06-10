@@ -37,7 +37,6 @@ type Actor struct {
 	system *ActorSystem
 	mod    api.Module
 	in     chan Message
-	out    chan Message
 	recv   api.Function
 	ptr    uint32
 	addr   uint32
@@ -47,7 +46,6 @@ func (s *ActorSystem) ActorOf(name string, bytes []byte) *Actor {
 	a := &Actor{}
 	a.system = s
 	a.in = make(chan Message, 32)
-	a.out = make(chan Message)
 	ctx := context.Background()
 	cfg := wazero.NewModuleConfig().WithStderr(os.Stderr).WithStdout(os.Stdout)
 	mod, err := s.rt.InstantiateWithConfig(ctx, bytes, cfg)
@@ -89,12 +87,21 @@ func (a *Actor) receive() {
 		m := <-a.in
 		// Allocate enough space for m.body.
 		sz := uint32(len(m.body))
+
+		// Write to the shared buffer the message body.
 		a.mod.Memory().Write(a.ptr, m.body)
+
+		// Invoke the actor receive.
 		_, _ = a.recv.Call(ctx, uint64(sz))
+		// The actor appends in the same buffer, overwriting it,
+		// a sequence of outgoing messages, prefixed by the total count.
+
+		// Now read from the shared buffer.
 		off := a.ptr
 		count, _ := a.mod.Memory().ReadUint32Le(off)
 		off += 4
 
+		// For each message in the buffer
 		for i := uint32(0); i < count; i++ {
 			// Prefix 4-byte address, 4-byte size, then contents.
 			address, _ := a.mod.Memory().ReadUint32Le(off)
@@ -107,8 +114,10 @@ func (a *Actor) receive() {
 				addr: address,
 				body: bytes,
 			}
+			// We have decoded the header of the message
+			// We don't need to decode the contents, we just
+			// pass-through them to the other actors.
 			a.system.actors[address].in <- m
-
 		}
 
 	}
