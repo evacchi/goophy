@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 )
 
@@ -41,7 +42,11 @@ func startup(addr uint32) *[SHARED_BUF_SIZE]uint8 {
 func receive(size uint32) {
 	reset()
 	message := Message{}
-	message.decode(buf[0:size])
+	//message.decode(buf[0:size])
+	err := json.Unmarshal(buf[0:size], &message)
+	if err != nil {
+		panic(err)
+	}
 
 	// We received a message, print out a message.
 	fmt.Printf("Received message from %d: '%s'\n", message.Sender, message.Text)
@@ -63,8 +68,13 @@ func (a Address) Tell(message Message) {
 
 	// append another message to the buffer
 	outBuf := buf[currOffset:]
-	sz := message.encode(a, outBuf)
-	currOffset += sz
+	//sz := message.encode(a, outBuf)
+	bytes, err := json.Marshal(message)
+	if err != nil {
+		panic(err)
+	}
+	copy(outBuf, bytes)
+	currOffset += uint32(len(bytes))
 }
 
 func reset() {

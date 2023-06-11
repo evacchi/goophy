@@ -16,7 +16,7 @@ func main() {
 type Address uint32
 
 type ActorRef interface {
-	Tell(m Envelope)
+	Tell(m EncodedMessage)
 	Address() Address
 }
 
@@ -33,15 +33,12 @@ func NewActorSystem(ctx context.Context) *ActorSystem {
 	return &ActorSystem{rt: rt, actors: map[Address]*Actor{}}
 }
 
-type Envelope struct {
-	sender Address
-	body   []byte
-}
+type EncodedMessage []byte
 
 type Actor struct {
 	system *ActorSystem
 	mod    api.Module
-	in     chan Envelope
+	in     chan EncodedMessage
 	recv   api.Function
 	ptr    uint32
 	addr   Address
@@ -50,7 +47,7 @@ type Actor struct {
 func (s *ActorSystem) ActorOf(name string, bytes []byte) ActorRef {
 	a := &Actor{}
 	a.system = s
-	a.in = make(chan Envelope, 32)
+	a.in = make(chan EncodedMessage, 32)
 	ctx := context.Background()
 	cfg := wazero.NewModuleConfig().WithStderr(os.Stderr).WithStdout(os.Stdout)
 	mod, err := s.rt.InstantiateWithConfig(ctx, bytes, cfg)
@@ -82,10 +79,10 @@ func (a *Actor) receive() {
 	for {
 		m := <-a.in
 		// Allocate enough space for m.body.
-		sz := uint32(len(m.body))
+		sz := uint32(len(m))
 
 		// Write to the shared buffer the message body.
-		a.mod.Memory().Write(a.ptr, m.body)
+		a.mod.Memory().Write(a.ptr, m)
 
 		// Invoke the actor receive.
 		_, _ = a.recv.Call(ctx, uint64(sz))
@@ -106,10 +103,7 @@ func (a *Actor) receive() {
 			off += 4
 			bytes, _ := a.mod.Memory().Read(off, sz)
 			off += sz
-			m = Envelope{
-				sender: Address(address),
-				body:   bytes,
-			}
+			m := EncodedMessage(bytes)
 			// We have decoded the header of the message
 			// We don't need to decode the contents, we just
 			// pass-through them to the other actors.
@@ -123,13 +117,9 @@ func (a *Actor) ActorRef() ActorRef {
 	return a
 }
 
-func (a *Actor) Tell(m Envelope) {
-	println("tell message to", m.sender)
-	actor, ok := a.system.actors[m.sender]
-	if !ok {
-		println("no such actor", m.sender)
-	}
-	actor.in <- m
+func (a *Actor) Tell(m EncodedMessage) {
+	println("tell message to", a)
+	a.in <- m
 }
 
 func (a *Actor) Address() Address {
