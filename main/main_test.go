@@ -16,9 +16,9 @@ func TestActorSystem_ActorOf(t *testing.T) {
 	pong := system.ActorOf("ponger", pingpong)
 
 	var m []byte
-	m = binary.LittleEndian.AppendUint32(m, ping.Address())
+	m = binary.LittleEndian.AppendUint32(m, uint32(ping.Address()))
 	m = append(m, []byte("ping")...)
 
-	ping.Tell(Message{pong.Address(), m})
+	ping.Tell(Envelope{sender: pong.Address(), body: m})
 	system.Wait()
 }

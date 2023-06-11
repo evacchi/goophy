@@ -13,7 +13,12 @@ import (
 func main() {
 }
 
-type Address = uint32
+type Address uint32
+
+type ActorRef interface {
+	Tell(m Envelope)
+	Address() Address
+}
 
 type ActorSystem struct {
 	gen    atomic.Uint32
@@ -28,24 +33,24 @@ func NewActorSystem(ctx context.Context) *ActorSystem {
 	return &ActorSystem{rt: rt, actors: map[Address]*Actor{}}
 }
 
-type Message struct {
-	addr Address
-	body []byte
+type Envelope struct {
+	sender Address
+	body   []byte
 }
 
 type Actor struct {
 	system *ActorSystem
 	mod    api.Module
-	in     chan Message
+	in     chan Envelope
 	recv   api.Function
 	ptr    uint32
-	addr   uint32
+	addr   Address
 }
 
-func (s *ActorSystem) ActorOf(name string, bytes []byte) *Actor {
+func (s *ActorSystem) ActorOf(name string, bytes []byte) ActorRef {
 	a := &Actor{}
 	a.system = s
-	a.in = make(chan Message, 32)
+	a.in = make(chan Envelope, 32)
 	ctx := context.Background()
 	cfg := wazero.NewModuleConfig().WithStderr(os.Stderr).WithStdout(os.Stdout)
 	mod, err := s.rt.InstantiateWithConfig(ctx, bytes, cfg)
@@ -55,7 +60,7 @@ func (s *ActorSystem) ActorOf(name string, bytes []byte) *Actor {
 	a.mod = mod
 	a.recv = a.mod.ExportedFunction("receive")
 	startup := a.mod.ExportedFunction("startup")
-	a.addr = s.gen.Add(1)
+	a.addr = Address(s.gen.Add(1))
 	s.wg.Add(1)
 	s.actors[a.addr] = a
 	println("created actor", a.addr)
@@ -65,20 +70,11 @@ func (s *ActorSystem) ActorOf(name string, bytes []byte) *Actor {
 	}
 	a.ptr = uint32(ptr[0])
 	go a.receive()
-	return a
+	return a.ActorRef()
 }
 
 func (s *ActorSystem) Wait() {
 	s.wg.Wait()
-}
-
-func (a *Actor) Tell(m Message) {
-	println("tell message to", m.addr)
-	actor, ok := a.system.actors[m.addr]
-	if !ok {
-		println("no such actor", m.addr)
-	}
-	actor.in <- m
 }
 
 func (a *Actor) receive() {
@@ -110,17 +106,30 @@ func (a *Actor) receive() {
 			off += 4
 			bytes, _ := a.mod.Memory().Read(off, sz)
 			off += sz
-			m = Message{
-				addr: address,
-				body: bytes,
+			m = Envelope{
+				sender: Address(address),
+				body:   bytes,
 			}
 			// We have decoded the header of the message
 			// We don't need to decode the contents, we just
 			// pass-through them to the other actors.
-			a.system.actors[address].in <- m
+			a.system.actors[Address(address)].in <- m
 		}
 
 	}
+}
+
+func (a *Actor) ActorRef() ActorRef {
+	return a
+}
+
+func (a *Actor) Tell(m Envelope) {
+	println("tell message to", m.sender)
+	actor, ok := a.system.actors[m.sender]
+	if !ok {
+		println("no such actor", m.sender)
+	}
+	actor.in <- m
 }
 
 func (a *Actor) Address() Address {
