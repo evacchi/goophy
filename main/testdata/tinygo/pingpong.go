@@ -42,7 +42,6 @@ func startup(addr uint32) *[SHARED_BUF_SIZE]uint8 {
 func receive(size uint32) {
 	reset()
 	message := Message{}
-	//message.decode(buf[0:size])
 	err := json.Unmarshal(buf[0:size], &message)
 	if err != nil {
 		panic(err)
@@ -68,13 +67,15 @@ func (a Address) Tell(message Message) {
 
 	// append another message to the buffer
 	outBuf := buf[currOffset:]
-	//sz := message.encode(a, outBuf)
+	// target: uint32
+	binary.LittleEndian.PutUint32(outBuf[:4], uint32(a))
 	bytes, err := json.Marshal(message)
 	if err != nil {
 		panic(err)
 	}
-	copy(outBuf, bytes)
-	currOffset += uint32(len(bytes))
+	binary.LittleEndian.PutUint32(outBuf[4:8], uint32(len(bytes)))
+	copy(outBuf[8:], bytes)
+	currOffset += 4 + 4 + uint32(len(bytes))
 }
 
 func reset() {

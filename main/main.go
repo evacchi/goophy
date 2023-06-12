@@ -103,11 +103,11 @@ func (a *Actor) receive() {
 			off += 4
 			bytes, _ := a.mod.Memory().Read(off, sz)
 			off += sz
-			m := EncodedMessage(bytes)
+			mm := EncodedMessage(bytes)
 			// We have decoded the header of the message
 			// We don't need to decode the contents, we just
 			// pass-through them to the other actors.
-			a.system.actors[Address(address)].in <- m
+			a.system.actors[Address(address)].in <- mm
 		}
 
 	}
@@ -118,7 +118,7 @@ func (a *Actor) ActorRef() ActorRef {
 }
 
 func (a *Actor) Tell(m EncodedMessage) {
-	println("tell message to", a)
+	println("tell message to", a.Address())
 	a.in <- m
 }
 
