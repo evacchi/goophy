@@ -51,7 +51,10 @@ func receive(size uint32) {
 	fmt.Printf("Received message from %d: '%s'\n", message.Sender, message.Text)
 
 	// This is a ping-pong; we reply to the sender with another message.
-	message.Sender.Tell(Message{Sender: self, Text: fmt.Sprintf("ping from %d", self)})
+	message.Sender.Tell(
+		Message{
+			Sender: self,
+			Text:   fmt.Sprintf("ping from %d", self)})
 	done()
 }
 
