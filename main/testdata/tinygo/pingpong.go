@@ -1,36 +1,27 @@
 package main
 
 import (
-	"encoding/binary"
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"strconv"
 )
 
-const SHARED_BUF_SIZE = 1024
-
-var buf [SHARED_BUF_SIZE]uint8
-
 var self Address
-var outgoing uint32 = 0
-var currOffset uint32 = 0
 
 type Address uint32
 
-func main() {
-	// main is necessary for tinygo
-	reset()
-}
+var reader *bufio.Scanner
 
-// startup initializes the actor: receives its own address
-// to make the actor self-aware.
-//
-// It also exports the address of the buf buffer
-// to the host, so that we can share messages with it.
-//
-//export startup
-func startup(addr uint32) *[SHARED_BUF_SIZE]uint8 {
-	self = Address(addr)
-	return &buf
+var counter = 10
+
+// main receives the actor identifier as an argument.
+func main() {
+	atoi, _ := strconv.Atoi(os.Args[1])
+	self = Address(atoi)
+	reader = bufio.NewScanner(os.Stdin)
 }
 
 // receive reads from buf[0:size] for the given size,
@@ -39,23 +30,29 @@ func startup(addr uint32) *[SHARED_BUF_SIZE]uint8 {
 // 0 or more messages.
 //
 //export receive
-func receive(size uint32) {
-	reset()
+func receive() {
+	if counter == 0 {
+		log.Printf("This actor is dead.")
+		return
+	}
+
+	reader.Scan()
 	message := Message{}
-	err := json.Unmarshal(buf[0:size], &message)
+	err := json.Unmarshal(reader.Bytes(), &message)
 	if err != nil {
 		panic(err)
 	}
 
 	// We received a message, print out a message.
-	fmt.Printf("Received message from %d: '%s'\n", message.Sender, message.Text)
+	log.Printf("Received message from %d: '%s'\n", message.Sender, message.Text)
 
 	// This is a ping-pong; we reply to the sender with another message.
 	message.Sender.Tell(
 		Message{
 			Sender: self,
 			Text:   fmt.Sprintf("ping from %d", self)})
-	done()
+
+	counter--
 }
 
 // Tell writes a message to buf and increases the outgoing count.
@@ -63,32 +60,14 @@ func receive(size uint32) {
 // the host reads the count and then collects and dispatches all the messages
 // to every address.
 func (a Address) Tell(message Message) {
-	// increase the outgoing count
-	outgoing++
-	// update the header with the new count
-	binary.LittleEndian.PutUint32(buf[:4], outgoing)
-
-	// append another message to the buffer
-	outBuf := buf[currOffset:]
-	// target: uint32
-	binary.LittleEndian.PutUint32(outBuf[:4], uint32(a))
 	bytes, err := json.Marshal(message)
+	envelope := Envelope{
+		Target: a,
+		Text:   string(bytes),
+	}
+	bytes, err = json.Marshal(envelope)
 	if err != nil {
 		panic(err)
 	}
-	binary.LittleEndian.PutUint32(outBuf[4:8], uint32(len(bytes)))
-	copy(outBuf[8:], bytes)
-	currOffset += 4 + 4 + uint32(len(bytes))
-}
-
-func reset() {
-	currOffset = 4
-	outgoing = 0
-}
-
-func done() {
-	// if the actor did not send out any message, write a 0 count header
-	if outgoing == 0 {
-		binary.LittleEndian.PutUint32(buf[:4], outgoing)
-	}
+	os.Stdout.Write(append(bytes, '\n'))
 }

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"io"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -36,36 +41,43 @@ func NewActorSystem(ctx context.Context) *ActorSystem {
 type EncodedMessage []byte
 
 type Actor struct {
-	system *ActorSystem
-	mod    api.Module
-	in     chan EncodedMessage
-	recv   api.Function
-	ptr    uint32
-	addr   Address
+	system   *ActorSystem
+	mod      api.Module
+	in       chan EncodedMessage
+	recv     api.Function
+	ptr      uint32
+	addr     Address
+	actorIn  io.Writer
+	actorOut *bufio.Scanner
 }
 
-func (s *ActorSystem) ActorOf(name string, bytes []byte) ActorRef {
+func (s *ActorSystem) ActorOf(name string, buf []byte) ActorRef {
 	a := &Actor{}
 	a.system = s
 	a.in = make(chan EncodedMessage, 32)
+	var stdin, stdout bytes.Buffer
+
+	a.actorIn = &stdin
+	a.actorOut = bufio.NewScanner(&stdout)
+	a.addr = Address(s.gen.Add(1))
 	ctx := context.Background()
-	cfg := wazero.NewModuleConfig().WithStderr(os.Stderr).WithStdout(os.Stdout)
-	mod, err := s.rt.InstantiateWithConfig(ctx, bytes, cfg)
+	cfg := wazero.NewModuleConfig().
+		WithStdin(&stdin).
+		WithStderr(os.Stderr).
+		WithStdout(&stdout).
+		WithArgs("actor", strconv.Itoa(int(a.addr)))
+	mod, err := s.rt.InstantiateWithConfig(ctx, buf, cfg)
 	if err != nil {
 		panic(err)
 	}
 	a.mod = mod
 	a.recv = a.mod.ExportedFunction("receive")
-	startup := a.mod.ExportedFunction("startup")
-	a.addr = Address(s.gen.Add(1))
 	s.wg.Add(1)
 	s.actors[a.addr] = a
 	println("created actor", a.addr)
-	ptr, err := startup.Call(ctx, uint64(a.addr))
 	if err != nil {
 		panic(err)
 	}
-	a.ptr = uint32(ptr[0])
 	go a.receive()
 	return a.ActorRef()
 }
@@ -78,39 +90,24 @@ func (a *Actor) receive() {
 	ctx := context.Background()
 	for {
 		m := <-a.in
-		// Allocate enough space for m.body.
-		sz := uint32(len(m))
-
 		// Write to the shared buffer the message body.
-		a.mod.Memory().Write(a.ptr, m)
+		a.actorIn.Write(m)
+		a.actorIn.Write([]byte{'\n'})
 
 		// Invoke the actor receive.
-		_, _ = a.recv.Call(ctx, uint64(sz))
-		// The actor appends in the same buffer, overwriting it,
-		// a sequence of outgoing messages, prefixed by the total count.
+		_, _ = a.recv.Call(ctx)
 
-		// Now read from the shared buffer.
-		off := a.ptr
-		count, _ := a.mod.Memory().ReadUint32Le(off)
-		off += 4
-
-		// For each message in the buffer
-		for i := uint32(0); i < count; i++ {
-			// Prefix 4-byte address, 4-byte size, then contents.
-			address, _ := a.mod.Memory().ReadUint32Le(off)
-			off += 4
-			sz, _ = a.mod.Memory().ReadUint32Le(off)
-			off += 4
-			bytes, _ := a.mod.Memory().Read(off, sz)
-			off += sz
-			mm := EncodedMessage(bytes)
-			// We have decoded the header of the message
-			// We don't need to decode the contents, we just
-			// pass-through them to the other actors.
-			a.system.actors[Address(address)].in <- mm
-		}
-
+		a.actorOut.Scan()
+		bytes := a.actorOut.Bytes()
+		e := Envelope{}
+		json.Unmarshal(bytes, &e)
+		a.system.actors[e.Target].Tell(EncodedMessage(e.Text))
 	}
+}
+
+type Envelope struct {
+	Target Address
+	Text   string
 }
 
 func (a *Actor) ActorRef() ActorRef {
@@ -118,7 +115,6 @@ func (a *Actor) ActorRef() ActorRef {
 }
 
 func (a *Actor) Tell(m EncodedMessage) {
-	println("tell message to", a.Address())
 	a.in <- m
 }
 

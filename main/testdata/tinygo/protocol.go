@@ -1,6 +1,12 @@
 package main
 
 type Message struct {
-	Sender Address
+	Sender  Address
+	Text    string
+	Counter int
+}
+
+type Envelope struct {
+	Target Address
 	Text   string
 }
